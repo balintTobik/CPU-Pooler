@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -69,31 +68,55 @@ func setAffinity(nbrCPUs int, cpuList []int) []int {
 	return cpuList[nbrCPUs:]
 }
 
-func cpuListStrToIntSlice(cpuString string) (cpuList []int) {
-	if cpuString == "" {
-		return nil
-	}
-	for _, cpuStr := range strings.Split(cpuString, ",") {
-		cpu, err := strconv.Atoi(cpuStr)
-		if err != nil {
-			return nil
-		}
-		cpuList = append(cpuList, cpu)
-	}
-	return cpuList
-}
-
-func pollCPUSetCompletion(exclusiveCPUs []int, sharedCPUs []int) {
-	var cs cpuset.CPUSet
-	expCpus := cpuset.NewBuilder()
-	expCpus.Add(exclusiveCPUs...)
-	expCpus.Add(sharedCPUs...)
-
+func pollCPUSetCompletion()(exclusiveCPUs, sharedCPUs []int) {
+	var cs, expCpus, exclusiveCpuSet, sharedCpuSet cpuset.CPUSet
+	var err error
+	poolType := os.Getenv("CPU_POOLS")
 	// Wait max 10 seconds for cpusetter to set the cgroup cpuset
 	for i := 0; i < 10; i++ {
+		switch poolType {
+		case types.ExclusivePoolID + "&" + types.SharedPoolID:
+			exclusiveCpuSet, err = cpuset.Parse(os.Getenv("EXCLUSIVE_CPUS"))
+			if err != nil {
+				fmt.Printf("Cannot parse EXCLUSIVE_CPUS env variable, %v\n", err)
+			}
+			sharedCpuSet, err = cpuset.Parse(os.Getenv("SHARED_CPUS"))
+			if err != nil {
+				fmt.Printf("Cannot parse SHARED_CPUS env variable, %v\n", err)
+			}
+			if exclusiveCpuSet.IsEmpty() || sharedCpuSet.IsEmpty() {
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			expCpus = exclusiveCpuSet.Union(sharedCpuSet)
+		case types.ExclusivePoolID:
+			fmt.Printf("POOL TYPE: EXCLUSIVE\n")
+			exclusiveCpuSet, err = cpuset.Parse(os.Getenv("EXCLUSIVE_CPUS"))
+			if err != nil {
+				fmt.Printf("Cannot parse EXCLUSIVE_CPUS env variable, %v\n", err)
+			}
+			if exclusiveCpuSet.IsEmpty() {
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			expCpus = exclusiveCpuSet
+		case types.SharedPoolID:
+			fmt.Printf("POOL TYPE: SHARED\n")
+			sharedCpuSet, err = cpuset.Parse(os.Getenv("SHARED_CPUS"))
+			if err != nil {
+				fmt.Printf("Cannot parse SHARED_CPUS env variable, %v\n", err)
+			}
+			if sharedCpuSet.IsEmpty() {
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			expCpus = sharedCpuSet
+		default:
+			fmt.Printf("CPU_POOLS envrionment variable is %s\n", poolType)
+		}
 		file, err := os.Open("/sys/fs/cgroup/cpuset/cpuset.cpus")
 		if err != nil {
-			fmt.Printf("Cannot open cgroup cpuset %v", err)
+			fmt.Printf("Cannot open cgroup cpuset %v\n", err)
 			os.Exit(1)
 		}
 		scanner := bufio.NewScanner(file)
@@ -101,18 +124,25 @@ func pollCPUSetCompletion(exclusiveCPUs []int, sharedCPUs []int) {
 		cgCPUSet := scanner.Text()
 		cs, err = cpuset.Parse(cgCPUSet)
 		if err != nil {
-			fmt.Printf("Cannot parse cgroup cpuset %v:%v", cgCPUSet, err)
+			fmt.Printf("Cannot parse cgroup cpuset %v:%v\n", cgCPUSet, err)
 
 		}
-		if expCpus.Result().Equals(cs) {
+		fmt.Printf("Cgroup cpuset (%s) expected cpuset (%s)\n",
+		cs.String(), expCpus.String())
+		if expCpus.Equals(cs) {
+			exclusiveCPUs = exclusiveCpuSet.ToSlice()
+			sharedCPUs = sharedCpuSet.ToSlice()
+			fmt.Printf("Exclusive cpu list %v\n", exclusiveCPUs)
+			fmt.Printf("Shared cpu list %v\n", sharedCPUs)
 			return
 		}
 		file.Close()
 		time.Sleep(1 * time.Second)
 	}
 	fmt.Printf("Cgroup cpuset (%s) does not match to expected cpuset (%s)\n",
-		cs.String(), expCpus.Result().String())
+		cs.String(), expCpus.String())
 	os.Exit(1)
+	return
 }
 
 func main() {
@@ -121,15 +151,10 @@ func main() {
 		panic("Cannot read pod cpu annotation")
 	}
 	myContainerName := os.Getenv("CONTAINER_NAME")
-	exclCPUs := cpuListStrToIntSlice(os.Getenv("EXCLUSIVE_CPUS"))
-	sharedCPUs := cpuListStrToIntSlice(os.Getenv("SHARED_CPUS"))
-	fmt.Printf("Exclusive cpu list %v\n", exclCPUs)
-	fmt.Printf("Shared cpu list %v\n", sharedCPUs)
-
 	if myContainerName == "" {
 		panic("CONTAINER_NAME envrionment variable not found")
 	}
-	pollCPUSetCompletion(exclCPUs, sharedCPUs)
+	exclCPUs, sharedCPUs := pollCPUSetCompletion()
 	for _, container := range containers {
 		if container.Name != myContainerName {
 			continue
