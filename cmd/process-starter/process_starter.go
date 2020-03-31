@@ -69,48 +69,47 @@ func setAffinity(nbrCPUs int, cpuList []int) []int {
 }
 
 func pollCPUSetCompletion()(exclusiveCPUs, sharedCPUs []int) {
-	var cs, expCpus, exclusiveCpuSet, sharedCpuSet cpuset.CPUSet
+	var cs, expCpus, exclusiveCPUSet, sharedCPUSet cpuset.CPUSet
 	var err error
 	poolType := os.Getenv("CPU_POOLS")
+	fmt.Printf("Used CPU Pool(s):  %s\n", poolType)
 	// Wait max 10 seconds for cpusetter to set the cgroup cpuset
 	for i := 0; i < 10; i++ {
 		switch poolType {
 		case types.ExclusivePoolID + "&" + types.SharedPoolID:
-			exclusiveCpuSet, err = cpuset.Parse(os.Getenv("EXCLUSIVE_CPUS"))
+			exclusiveCPUSet, err = cpuset.Parse(os.Getenv("EXCLUSIVE_CPUS"))
 			if err != nil {
 				fmt.Printf("Cannot parse EXCLUSIVE_CPUS env variable, %v\n", err)
 			}
-			sharedCpuSet, err = cpuset.Parse(os.Getenv("SHARED_CPUS"))
+			sharedCPUSet, err = cpuset.Parse(os.Getenv("SHARED_CPUS"))
 			if err != nil {
 				fmt.Printf("Cannot parse SHARED_CPUS env variable, %v\n", err)
 			}
-			if exclusiveCpuSet.IsEmpty() || sharedCpuSet.IsEmpty() {
+			if exclusiveCPUSet.IsEmpty() || sharedCPUSet.IsEmpty() {
 				time.Sleep(1 * time.Second)
 				continue
 			}
-			expCpus = exclusiveCpuSet.Union(sharedCpuSet)
+			expCpus = exclusiveCPUSet.Union(sharedCPUSet)
 		case types.ExclusivePoolID:
-			fmt.Printf("POOL TYPE: EXCLUSIVE\n")
-			exclusiveCpuSet, err = cpuset.Parse(os.Getenv("EXCLUSIVE_CPUS"))
+			exclusiveCPUSet, err = cpuset.Parse(os.Getenv("EXCLUSIVE_CPUS"))
 			if err != nil {
 				fmt.Printf("Cannot parse EXCLUSIVE_CPUS env variable, %v\n", err)
 			}
-			if exclusiveCpuSet.IsEmpty() {
+			if exclusiveCPUSet.IsEmpty() {
 				time.Sleep(1 * time.Second)
 				continue
 			}
-			expCpus = exclusiveCpuSet
+			expCpus = exclusiveCPUSet
 		case types.SharedPoolID:
-			fmt.Printf("POOL TYPE: SHARED\n")
-			sharedCpuSet, err = cpuset.Parse(os.Getenv("SHARED_CPUS"))
+			sharedCPUSet, err = cpuset.Parse(os.Getenv("SHARED_CPUS"))
 			if err != nil {
 				fmt.Printf("Cannot parse SHARED_CPUS env variable, %v\n", err)
 			}
-			if sharedCpuSet.IsEmpty() {
+			if sharedCPUSet.IsEmpty() {
 				time.Sleep(1 * time.Second)
 				continue
 			}
-			expCpus = sharedCpuSet
+			expCpus = sharedCPUSet
 		default:
 			fmt.Printf("CPU_POOLS envrionment variable is %s\n", poolType)
 		}
@@ -130,8 +129,8 @@ func pollCPUSetCompletion()(exclusiveCPUs, sharedCPUs []int) {
 		fmt.Printf("Cgroup cpuset (%s) expected cpuset (%s)\n",
 		cs.String(), expCpus.String())
 		if expCpus.Equals(cs) {
-			exclusiveCPUs = exclusiveCpuSet.ToSlice()
-			sharedCPUs = sharedCpuSet.ToSlice()
+			exclusiveCPUs = exclusiveCPUSet.ToSlice()
+			sharedCPUs = sharedCPUSet.ToSlice()
 			fmt.Printf("Exclusive cpu list %v\n", exclusiveCPUs)
 			fmt.Printf("Shared cpu list %v\n", sharedCPUs)
 			return
