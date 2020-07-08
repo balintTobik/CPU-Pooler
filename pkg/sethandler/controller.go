@@ -129,7 +129,7 @@ func shouldPodBeHandled(pod v1.Pod) bool {
 		return false
 	}
 	for _, containerStatus := range pod.Status.ContainerStatuses {
-		if containerStatus.ContainerID == "" {
+		if containerStatus.ContainerID == "" || containerStatus.Name == "" {
 			return false
 		}
 	}
@@ -138,6 +138,7 @@ func shouldPodBeHandled(pod v1.Pod) bool {
 
 func (setHandler *SetHandler) adjustContainerSets(pod v1.Pod) {
 	var pathToContainerCpusetFile string
+	log.Println("DEBUG - adjustContainerSets for pod: " + pod.ObjectMeta.Name)
 	for _, container := range pod.Spec.Containers {
 		cpuset, err := setHandler.determineCorrectCpuset(pod, container)
 		if err != nil {
@@ -145,9 +146,6 @@ func (setHandler *SetHandler) adjustContainerSets(pod v1.Pod) {
 			continue
 		}
 		containerID := determineCid(pod.Status, container.Name)
-		if strings.Contains(container.Name, "cpu-pooling") {
-			log.Println("LOFASZ: cpuset: " + cpuset.String() + "for container: " + containerID)
-		}
 		pathToContainerCpusetFile, err = setHandler.applyCpusetToContainer(containerID, cpuset)
 		if err != nil {
 			log.Println("ERROR: Cpuset for the containers of Pod:" + string(pod.ObjectMeta.UID) + " could not be re-adjusted, because:" + err.Error())
@@ -254,11 +252,12 @@ func (setHandler *SetHandler) applyCpusetToContainer(containerID string, cpuset 
 		log.Println("WARNING: for some reason cpuset to set was quite empty for container:" + containerID + ".I left it untouched.")
 		return "", nil
 	}
-	log.Println("LOFASZ: apply" + cpuset.String() + " for container: " + containerID)
 	//According to K8s documentation CID is stored in "docker://<container_id>" format
 	trimmedCid := strings.TrimPrefix(containerID, "docker://")
+	log.Println("DEBUG - containerID: " + trimmedCid)
 	var pathToContainerCpusetFile string
 	filepath.Walk(setHandler.cpusetRoot, func(path string, f os.FileInfo, err error) error {
+		log.Println("DEBUG - Check path: " + path)
 		if strings.Contains(path, trimmedCid) {
 			pathToContainerCpusetFile = path
 			return filepath.SkipDir
@@ -282,7 +281,6 @@ func (setHandler *SetHandler) applyCpusetToContainer(containerID string, cpuset 
 		return "", errors.New("Can't open cpuset file:" + pathToContainerCpusetFile + " for container:" + trimmedCid + " because:" + err.Error())
 	}
 	defer file.Close()
-	log.Println("LOFASZ: wrtite" + cpuset.String() + " for " + containerID + "cpuset file...")
 	_, err = file.WriteString(cpuset.String())
 	if err != nil {
 		return "", errors.New("Can't modify cpuset file:" + pathToContainerCpusetFile + " for container:" + trimmedCid + " because:" + err.Error())
