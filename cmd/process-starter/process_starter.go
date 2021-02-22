@@ -68,7 +68,7 @@ func setAffinity(nbrCPUs int, cpuList []int) []int {
 	return cpuList[nbrCPUs:]
 }
 
-func pollCPUSetCompletion()(exclusiveCPUs, sharedCPUs []int) {
+func pollCPUSetCompletion() (exclusiveCPUs, sharedCPUs []int) {
 	var cs, expCpus, exclusiveCPUSet, sharedCPUSet cpuset.CPUSet
 	var err error
 	poolType := os.Getenv("CPU_POOLS")
@@ -126,8 +126,8 @@ func pollCPUSetCompletion()(exclusiveCPUs, sharedCPUs []int) {
 			fmt.Printf("Cannot parse cgroup cpuset %v:%v\n", cgCPUSet, err)
 
 		}
-		fmt.Printf("Cgroup cpuset (%s) expected cpuset (%s)\n",
-		cs.String(), expCpus.String())
+		fmt.Printf("Cgroup cpuset (%s) expected cpuset (%s) - (%s)\n",
+			cs.String(), expCpus.String(), time.Now().String())
 		if expCpus.Equals(cs) {
 			exclusiveCPUs = exclusiveCPUSet.ToSlice()
 			sharedCPUs = sharedCPUSet.ToSlice()

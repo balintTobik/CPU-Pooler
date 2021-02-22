@@ -31,6 +31,11 @@ var (
 	setterAnnotationKey    = resourceBaseName + "/" + setterAnnotationSuffix
 )
 
+const (
+	MaxRetryCount = 100
+	RetryInterval = 100
+)
+
 type checkpointPodDevicesEntry struct {
 	PodUID        string
 	ContainerName string
@@ -113,8 +118,14 @@ func (setHandler *SetHandler) PodAdded(pod v1.Pod) {
 //PodChanged handles UPDATE operations
 func (setHandler *SetHandler) PodChanged(oldPod, newPod v1.Pod) {
 	//The maze wasn't meant for you either
+  if strings.Contains(newPod.ObjectMeta.Name, "sriov-ipv6-test"){
+			log.Println("TOBIK: test pod changed")
+	}
 	if !shouldPodBeHandled(newPod) {
 		return
+	}
+	if strings.Contains(newPod.ObjectMeta.Name, "sriov-ipv6-test"){
+			log.Println("TOBIK: handle test pod")
 	}
 	containersToBeSet := map[string]int{}
 	if newPod.ObjectMeta.Annotations[setterAnnotationKey] != "" {
@@ -123,7 +134,12 @@ func (setHandler *SetHandler) PodChanged(oldPod, newPod v1.Pod) {
 		containersToBeSet = gatherAllContainers(newPod)
 	}
 	if len(containersToBeSet) > 0 {
+		if strings.Contains(newPod.ObjectMeta.Name, "sriov-ipv6-test"){
+				log.Println("TOBIK: adjust test pod")
+		}
 		setHandler.adjustContainerSets(newPod, containersToBeSet)
+	}else if strings.Contains(newPod.ObjectMeta.Name, "sriov-ipv6-test"){
+			log.Println("TOBIK: test pod no container to adjust")
 	}
 }
 
@@ -167,7 +183,10 @@ func gatherAllContainers(pod v1.Pod) map[string]int {
 }
 
 func (setHandler *SetHandler) adjustContainerSets(pod v1.Pod, containersToBeSet map[string]int) {
-	var pathToContainerCpusetFile string
+	var (
+		pathToContainerCpusetFile string
+		err error
+	)
 	for _, container := range pod.Spec.Containers {
 		if _, found := containersToBeSet[container.Name]; !found {
 			continue
@@ -182,13 +201,25 @@ func (setHandler *SetHandler) adjustContainerSets(pod v1.Pod, containersToBeSet 
 			log.Printf("ERROR: Cannot determine container id for %s from Pod: %s ID: %s", container.Name, pod.ObjectMeta.Name, pod.ObjectMeta.UID)
 			return
 		}
-		pathToContainerCpusetFile, err = setHandler.applyCpusetToContainer(containerID, cpuset)
+		for i := 0; i < MaxRetryCount; i++ {
+			pathToContainerCpusetFile, err = setHandler.applyCpusetToContainer(containerID, cpuset)
+			if err == nil{
+				break
+			}
+			time.Sleep(RetryInterval * time.Millisecond)
+		}
 		if err != nil {
 			log.Printf("ERROR: Cpuset for the containers of Pod: %s with ID: %s could not be re-adjusted, because: %s", pod.ObjectMeta.Name, pod.ObjectMeta.UID, err)
 			continue
 		}
 	}
-	err := setHandler.applyCpusetToInfraContainer(pod.ObjectMeta, pod.Status, pathToContainerCpusetFile)
+	for i := 0; i < MaxRetryCount; i++ {
+		err := setHandler.applyCpusetToInfraContainer(pod.ObjectMeta, pod.Status, pathToContainerCpusetFile)
+		if err == nil{
+			break
+		}
+		time.Sleep(RetryInterval * time.Millisecond)
+	}
 	if err != nil {
 		log.Printf("ERROR: Cpuset for the infracontainer of Pod: %s with ID: %s could not be re-adjusted, because: %s", pod.ObjectMeta.Name, pod.ObjectMeta.UID, err)
 		return
@@ -294,25 +325,37 @@ func (setHandler *SetHandler) applyCpusetToContainer(containerID string, cpuset 
 	//According to K8s documentation CID is stored in "docker://<container_id>" format when dockershim is configured for CRE
 	trimmedCid := strings.TrimPrefix(containerID, "docker://")
 	var pathToContainerCpusetFile string
-	filepath.Walk(setHandler.cpusetRoot, func(path string, f os.FileInfo, err error) error {
+	err := filepath.Walk(setHandler.cpusetRoot, func(path string, f os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
 		if strings.Contains(path, trimmedCid) {
 			pathToContainerCpusetFile = path
 			return filepath.SkipDir
 		}
 		return nil
 	})
+	if err != nil {
+		return "", fmt.Errorf("%s cpuset path error: %s", trimmedCid, err.Error())
+	}
 	if pathToContainerCpusetFile == "" {
 		return "", fmt.Errorf("cpuset file does not exist for container: %s under the provided cgroupfs hierarchy: %s", trimmedCid, setHandler.cpusetRoot)
 	}
 	returnContainerPath := pathToContainerCpusetFile
 	//And for our grand finale, we just "echo" the calculated cpuset to the cpuset cgroupfs "file" of the given container
 	//Find child cpuset if it exists (kube-proxy)
-	filepath.Walk(pathToContainerCpusetFile, func(path string, f os.FileInfo, err error) error {
+	err = filepath.Walk(pathToContainerCpusetFile, func(path string, f os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
 		if f.IsDir() {
 			pathToContainerCpusetFile = path
 		}
 		return nil
 	})
+	if err != nil {
+		return "", fmt.Errorf("%s child cpuset path error: %s", trimmedCid, err.Error())
+	}
 	file, err := os.OpenFile(pathToContainerCpusetFile+"/cpuset.cpus", os.O_WRONLY|os.O_SYNC, 0755)
 	if err != nil {
 		return "", fmt.Errorf("can't open cpuset file: %s for container: %s because: %s", pathToContainerCpusetFile, containerID, err)
